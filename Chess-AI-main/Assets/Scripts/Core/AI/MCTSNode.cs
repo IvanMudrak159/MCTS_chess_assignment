@@ -12,23 +12,26 @@
         public float TotalValue { get; private set; }
         public List<Move> UnexploredMoves { get; private set; }
         public bool IsPlayerMove { get; private set; }
+        public bool IsRoot {get; private set;}
 
-        public MCTSNode(Board gameState, MCTSNode parent, Move move, bool isPlayerMove)
+
+        public MCTSNode(Board gameState, MCTSNode parent, Move move, bool isPlayerMove, bool isRoot)
         {
             MoveGenerator moveGenerator = new MoveGenerator ();
             GameState = gameState;
             Parent = parent;
             Move = move;
+            IsRoot = isRoot;
             IsPlayerMove = isPlayerMove;
             Children = new List<MCTSNode>();
-            UnexploredMoves = moveGenerator.GenerateMoves_DO_NOT_USE(gameState);
+            UnexploredMoves = moveGenerator.GenerateMoves(gameState, isRoot);
             VisitCount = 0;
             TotalValue = 0;
         }
 
         public MCTSNode AddChild(Move move, Board newGameState)
         {
-            var childNode = new MCTSNode(newGameState, this, move, IsPlayerMove);
+            var childNode = new MCTSNode(newGameState, this, move, IsPlayerMove, IsRoot);
             Children.Add(childNode);
             UnexploredMoves.Remove(move);
             return childNode;

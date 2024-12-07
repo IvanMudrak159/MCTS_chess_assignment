@@ -10,5 +10,6 @@ namespace Chess
         public bool limitNumOfPlayouts;
         public int maxNumOfPlayouts;
         public int playoutDepthLimit;
+        public float ExplorationConstant = 1f;
     }
 }

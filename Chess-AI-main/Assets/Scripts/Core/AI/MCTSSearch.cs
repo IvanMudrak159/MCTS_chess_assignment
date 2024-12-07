@@ -1,15 +1,14 @@
 ﻿namespace Chess
 {
     using System;
-    using System.Collections.Generic;
-    using System.Threading;
-    using UnityEngine;
-    using static System.Math;
+    using System.Linq;
+
     class MCTSSearch : ISearch
     {
         public event System.Action<Move> onSearchComplete;
 
         MoveGenerator moveGenerator;
+        MCTSNode rootNode;
 
         Move bestMove;
         int bestEval;
@@ -21,7 +20,6 @@
 
         System.Random rand;
 
-        // Diagnostics
         public SearchDiagnostics Diagnostics { get; set; }
         System.Diagnostics.Stopwatch searchStopwatch;
 
@@ -46,14 +44,13 @@
             abortSearch = false;
             Diagnostics = new SearchDiagnostics();
 
+            rootNode = new MCTSNode(board, null, Move.InvalidMove, board.WhiteToMove, true);
+
             SearchMoves();
 
             onSearchComplete?.Invoke(bestMove);
 
-            if (!settings.useThreading)
-            {
-                LogDebugInfo();
-            }
+            LogDebugInfo();
         }
 
         public void EndSearch()
@@ -66,15 +63,40 @@
 
         void SearchMoves()
         {
-            // TODO
-            // Don't forget to end the search once the abortSearch parameter gets set to true.
+            MCTSNode selectedNode = Select(rootNode);
+        }
 
-            throw new NotImplementedException();
+        MCTSNode Select(MCTSNode node)
+        {
+            while (node.UnexploredMoves.Count == 0 && node.Children.Count > 0)
+            {
+                node = node.Children.OrderByDescending(UCB1Value).First();
+            }
+            return node;
+        }
+
+        float UCB1Value(MCTSNode node)
+        {
+            if (node.VisitCount == 0)
+                return float.MaxValue;
+
+            float averageValue = node.TotalValue / node.VisitCount;
+
+            if (!node.IsPlayerMove)
+            {
+                averageValue = -averageValue;
+            }
+
+            float explorationTerm = settings.ExplorationConstant *
+                (float)Math.Sqrt(Math.Log(node.Parent.VisitCount) / node.VisitCount);
+
+            return averageValue + explorationTerm;
         }
 
         void LogDebugInfo()
         {
-            // Optional
+            searchStopwatch.Stop();
+            UnityEngine.Debug.Log($"Search completed in {searchStopwatch.ElapsedMilliseconds} ms");
         }
 
         void InitDebugInfo()
