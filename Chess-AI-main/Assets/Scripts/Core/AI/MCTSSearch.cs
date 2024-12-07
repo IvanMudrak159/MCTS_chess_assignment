@@ -1,4 +1,6 @@
-﻿namespace Chess
+﻿using UnityEngine;
+
+namespace Chess
 {
     using System;
     using System.Linq;
@@ -81,14 +83,15 @@
                 return float.MaxValue;
 
             float averageValue = node.TotalValue / node.VisitCount;
-
+            averageValue = Mathf.Clamp01(averageValue);
+            
             if (!node.IsPlayerMove)
             {
-                averageValue = -averageValue;
+                averageValue = 1 - averageValue;
             }
 
-            float explorationTerm = settings.ExplorationConstant *
-                (float)Math.Sqrt(Math.Log(node.Parent.VisitCount) / node.VisitCount);
+            float explorationTerm = settings.ExplorationConstant * 
+                                    Mathf.Sqrt(Mathf.Log(node.Parent.VisitCount) / node.VisitCount);
 
             return averageValue + explorationTerm;
         }
