@@ -66,6 +66,17 @@ namespace Chess
         void SearchMoves()
         {
             MCTSNode selectedNode = Select(rootNode);
+            if (selectedNode.UnexploredMoves.Count > 0)
+            {
+                Move moveToExplore = selectedNode.UnexploredMoves.First();
+                Board newGameState = board.Clone();
+                newGameState.MakeMove(moveToExplore);
+                MCTSNode childNode = selectedNode.AddChild(moveToExplore, newGameState);
+            }
+            else
+            {
+                MCTSNode bestChild = selectedNode.Children.OrderByDescending(UCB1Value).First();
+            }
         }
 
         MCTSNode Select(MCTSNode node)
