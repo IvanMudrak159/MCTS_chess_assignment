@@ -66,16 +66,16 @@ namespace Chess
         void SearchMoves()
         {
             MCTSNode selectedNode = Select(rootNode);
+
             if (selectedNode.UnexploredMoves.Count > 0)
             {
-                Move moveToExplore = selectedNode.UnexploredMoves.First();
+                Move moveToExplore = selectedNode.UnexploredMoves.Last();
                 Board newGameState = board.Clone();
                 newGameState.MakeMove(moveToExplore);
+
                 MCTSNode childNode = selectedNode.AddChild(moveToExplore, newGameState);
-            }
-            else
-            {
-                MCTSNode bestChild = selectedNode.Children.OrderByDescending(UCB1Value).First();
+                float simulationResult = Simulate(childNode);
+                Backpropagate(childNode, simulationResult);
             }
         }
 
@@ -88,6 +88,44 @@ namespace Chess
             return node;
         }
 
+        private float Simulate(MCTSNode node)
+        {
+            SimPiece[,] simState = node.GameState.GetLightweightClone();
+            bool currentPlayer = node.GameState.WhiteToMove;
+
+            for (int depth = 0; depth < settings.maxNumOfPlayouts; depth++)
+            {
+                var simMoves = moveGenerator.GetSimMoves(simState, currentPlayer);
+        
+                if (simMoves.Count == 0)
+                {
+                    return currentPlayer ? 0f : 1f;
+                }
+                SimMove randomMove = simMoves[rand.Next(simMoves.Count)];
+                simState = ApplySimMove(simState, randomMove);
+                currentPlayer = !currentPlayer;
+            }
+            return evaluation.EvaluateSimBoard(simState, currentPlayer);
+        }
+        
+        private SimPiece[,] ApplySimMove(SimPiece[,] state, SimMove move)
+        {
+            state[move.endCoord1, move.endCoord2] = state[move.startCoord1, move.startCoord2];
+            state[move.startCoord1, move.startCoord2] = null;
+            return state;
+        }
+
+        private void Backpropagate(MCTSNode node, float simulationResult)
+        {
+            MCTSNode currentNode = node;
+            while (currentNode != null)
+            {
+                currentNode.UpdateStatistics(simulationResult);
+                simulationResult = 1 - simulationResult;
+                currentNode = currentNode.Parent;
+            }
+        }
+        
         float UCB1Value(MCTSNode node)
         {
             if (node.VisitCount == 0)
@@ -110,7 +148,7 @@ namespace Chess
         void LogDebugInfo()
         {
             searchStopwatch.Stop();
-            UnityEngine.Debug.Log($"Search completed in {searchStopwatch.ElapsedMilliseconds} ms");
+            Debug.Log($"Search completed in {searchStopwatch.ElapsedMilliseconds} ms");
         }
 
         void InitDebugInfo()
