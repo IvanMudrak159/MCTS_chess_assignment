@@ -1,5 +1,6 @@
 ﻿using UnityEngine;
 
+
 namespace Chess
 {
     using System;
@@ -48,11 +49,32 @@ namespace Chess
 
             rootNode = new MCTSNode(board, null, Move.InvalidMove, board.WhiteToMove, true);
 
-            SearchMoves();
+            int iterations = 0;
+            while (!abortSearch && (iterations < settings.maxNumOfPlayouts || settings.useTimeLimit))
+            {
+                SearchMoves();
+                iterations++;
+                
+                if (settings.useTimeLimit && searchStopwatch.ElapsedMilliseconds >= settings.searchTimeMillis)
+                {
+                    abortSearch = true;
+                }
+            }
+            
+            bestMove = SelectBestMove();
 
             onSearchComplete?.Invoke(bestMove);
 
             LogDebugInfo();
+        }
+
+        private Move SelectBestMove()
+        {
+            if (rootNode.Children.Count == 0)
+                return Move.InvalidMove;
+                
+            MCTSNode bestChild = rootNode.Children.OrderByDescending(n => n.VisitCount).First();
+            return bestChild.Move;
         }
 
         public void EndSearch()
@@ -70,7 +92,7 @@ namespace Chess
             if (selectedNode.UnexploredMoves.Count > 0)
             {
                 Move moveToExplore = selectedNode.UnexploredMoves.Last();
-                Board newGameState = board.Clone();
+                Board newGameState = selectedNode.GameState.Clone();
                 newGameState.MakeMove(moveToExplore);
 
                 MCTSNode childNode = selectedNode.AddChild(moveToExplore, newGameState);
@@ -99,7 +121,7 @@ namespace Chess
         
                 if (simMoves.Count == 0)
                 {
-                    return currentPlayer ? 0f : 1f;
+                    return 0.5f;
                 }
                 SimMove randomMove = simMoves[rand.Next(simMoves.Count)];
                 simState = ApplySimMove(simState, randomMove);
@@ -149,6 +171,7 @@ namespace Chess
         {
             searchStopwatch.Stop();
             Debug.Log($"Search completed in {searchStopwatch.ElapsedMilliseconds} ms");
+            Debug.Log($"Best move found: {bestMove}");
         }
 
         void InitDebugInfo()
