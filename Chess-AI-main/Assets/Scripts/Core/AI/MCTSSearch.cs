@@ -59,14 +59,9 @@ namespace Chess
             int iterations = 0;
             while (!abortSearch && (iterations < settings.maxNumOfPlayouts || settings.useTimeLimit))
             {
-                MCTSNode selectedNode = Expand();
-                float simulationResult = Simulate(selectedNode);
-                Backpropagate(selectedNode, simulationResult);
-
+                SearchMoves();
                 iterations++;
                 
-                //bestMove = SelectBestMove();
-
                 if (settings.useTimeLimit && searchStopwatch.ElapsedMilliseconds >= settings.searchTimeMillis)
                 {
                     abortSearch = true;
@@ -86,7 +81,7 @@ namespace Chess
                 return Move.InvalidMove;
                 
             MCTSNode bestChild = rootNode.Children
-                .OrderByDescending(n => n.TotalValue / n.VisitCount)
+                .OrderByDescending(n => n.VisitCount == 0 ? float.NegativeInfinity : n.TotalValue / n.VisitCount)
                 .First();
             List<MCTSNode> children = rootNode.Children.OrderByDescending(n => n.TotalValue / n.VisitCount).ToList();
             return bestChild.Move;
@@ -98,6 +93,18 @@ namespace Chess
             {
                 abortSearch = true;
             }
+        }
+
+        void SearchMoves()
+        {
+            MCTSNode selectedNode = Expand();
+            if (selectedNode == null)
+            {
+                Debug.LogError("selectedNode is null");
+                return;
+            }
+            float simulationResult = Simulate(selectedNode);
+            Backpropagate(selectedNode, simulationResult);
         }
 
         private MCTSNode Expand()
@@ -127,10 +134,8 @@ namespace Chess
         {       
             SimPiece[,] simState = node.GameState.GetLightweightClone();
             bool currentPlayer = node.GameState.WhiteToMove;
-            List<SimMove> moves = new List<SimMove>();
+            //List<SimMove> moves = new List<SimMove>();
             KingDead deadKing = KingDead.None;
-            int depthFound = 0;
-            
             for (int depth = 0; depth < settings.playoutDepthLimit; depth++)
             {
                 var simMoves = moveGenerator.GetSimMoves(simState, currentPlayer);
@@ -140,31 +145,22 @@ namespace Chess
                     break;
                 }
                 SimMove randomMove = simMoves[rand.Next(simMoves.Count)];
-                moves.Add(randomMove);
+                //moves.Add(randomMove);
                 simState = ApplySimMove(simState, randomMove);
                 
                 deadKing = GetKingCaptured(simState);
                 
-                if(deadKing == KingDead.Black && currentPlayer)
-                {
-                    depthFound = depth;
-                    break;
-                }
-                if(deadKing == KingDead.White && !currentPlayer)
-                {
-                    depthFound = depth;
-                    break;
-                }
+                if(deadKing == KingDead.Black && currentPlayer) break;
+                if(deadKing == KingDead.White && !currentPlayer) break;
                 
                 currentPlayer = !currentPlayer;
             }
             
             if (deadKing == KingDead.None)
             {
-                //return evaluation.EvaluateSimBoard(simState, !node.GameState.WhiteToMove);
-                return 0;
+                return Mathf.Clamp01(evaluation.EvaluateSimBoard(simState, !node.GameState.WhiteToMove));
             }
-            return EvaluateKingCaptured(deadKing, !node.GameState.WhiteToMove, depthFound / (float) settings.playoutDepthLimit);
+            return EvaluateKingCaptured(deadKing, !node.GameState.WhiteToMove);
         }
         
         private SimPiece[,] ApplySimMove(SimPiece[,] state, SimMove move)
@@ -184,18 +180,20 @@ namespace Chess
                 currentNode = currentNode.Parent;
             }
         }
+        
         float UCB1Value(MCTSNode node)
         {
             if (node.VisitCount == 0)
                 return float.MaxValue;
 
             float averageValue = node.TotalValue / node.VisitCount;
-            // averageValue = Mathf.Clamp01(averageValue);
+            averageValue = Mathf.Clamp01(averageValue);
             
             if (!node.IsPlayerMove)
             {
                 averageValue = 1 - averageValue;
             }
+
             float explorationTerm = settings.ExplorationConstant * 
                                     Mathf.Sqrt(Mathf.Log(node.Parent.VisitCount) / node.VisitCount);
 
@@ -230,16 +228,16 @@ namespace Chess
             return !blackAlive ? KingDead.Black : KingDead.White;
         }
 
-        float EvaluateKingCaptured(KingDead deadKing, bool whiteToMove, float completeness)
+        float EvaluateKingCaptured(KingDead deadKing, bool whiteToMove)
         {
-            float res;
+            int res;
             if (whiteToMove)
             {
-                res = deadKing == KingDead.Black ? 1 - completeness : 0;
+                res = deadKing == KingDead.Black ? 1 : 0;
             }
             else
             {
-                res = deadKing == KingDead.White ? 1 - completeness : 0;
+                res = deadKing == KingDead.White ? 1 : 0;
             }
             return res;
         }
