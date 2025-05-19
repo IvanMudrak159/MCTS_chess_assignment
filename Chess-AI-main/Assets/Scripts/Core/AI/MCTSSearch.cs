@@ -1,13 +1,20 @@
-﻿using UnityEngine;
+﻿using System.Collections.Generic;
+using UnityEngine;
 
 
 namespace Chess
 {
-    using System;
     using System.Linq;
 
     class MCTSSearch : ISearch
     {
+        enum KingDead
+        {
+            None,
+            Black,
+            White,
+        }
+        
         public event System.Action<Move> onSearchComplete;
 
         MoveGenerator moveGenerator;
@@ -47,14 +54,19 @@ namespace Chess
             abortSearch = false;
             Diagnostics = new SearchDiagnostics();
 
-            rootNode = new MCTSNode(board, null, Move.InvalidMove, board.WhiteToMove, true);
+            rootNode = new MCTSNode(board, null, Move.InvalidMove, true, true);
 
             int iterations = 0;
             while (!abortSearch && (iterations < settings.maxNumOfPlayouts || settings.useTimeLimit))
             {
-                SearchMoves();
+                MCTSNode selectedNode = Expand();
+                float simulationResult = Simulate(selectedNode);
+                Backpropagate(selectedNode, simulationResult);
+
                 iterations++;
                 
+                //bestMove = SelectBestMove();
+
                 if (settings.useTimeLimit && searchStopwatch.ElapsedMilliseconds >= settings.searchTimeMillis)
                 {
                     abortSearch = true;
@@ -73,7 +85,10 @@ namespace Chess
             if (rootNode.Children.Count == 0)
                 return Move.InvalidMove;
                 
-            MCTSNode bestChild = rootNode.Children.OrderByDescending(n => n.VisitCount).First();
+            MCTSNode bestChild = rootNode.Children
+                .OrderByDescending(n => n.TotalValue / n.VisitCount)
+                .First();
+            List<MCTSNode> children = rootNode.Children.OrderByDescending(n => n.TotalValue / n.VisitCount).ToList();
             return bestChild.Move;
         }
 
@@ -85,49 +100,71 @@ namespace Chess
             }
         }
 
-        void SearchMoves()
+        private MCTSNode Expand()
         {
-            MCTSNode selectedNode = Select(rootNode);
+            MCTSNode node = rootNode;
 
-            if (selectedNode.UnexploredMoves.Count > 0)
-            {
-                Move moveToExplore = selectedNode.UnexploredMoves.Last();
-                Board newGameState = selectedNode.GameState.Clone();
-                newGameState.MakeMove(moveToExplore);
-
-                MCTSNode childNode = selectedNode.AddChild(moveToExplore, newGameState);
-                float simulationResult = Simulate(childNode);
-                Backpropagate(childNode, simulationResult);
-            }
-        }
-
-        MCTSNode Select(MCTSNode node)
-        {
             while (node.UnexploredMoves.Count == 0 && node.Children.Count > 0)
             {
                 node = node.Children.OrderByDescending(UCB1Value).First();
+            }
+
+            if (node.UnexploredMoves.Count > 0)
+            {
+                Move moveToExplore = node.UnexploredMoves.Last();
+                node.UnexploredMoves.Remove(moveToExplore);
+
+                Board newGameState = node.GameState.Clone();
+                newGameState.MakeMove(moveToExplore);
+                MCTSNode child = node.AddChild(moveToExplore, newGameState);
+
+                return child;
             }
             return node;
         }
 
         private float Simulate(MCTSNode node)
-        {
+        {       
             SimPiece[,] simState = node.GameState.GetLightweightClone();
             bool currentPlayer = node.GameState.WhiteToMove;
-
-            for (int depth = 0; depth < settings.maxNumOfPlayouts; depth++)
+            List<SimMove> moves = new List<SimMove>();
+            KingDead deadKing = KingDead.None;
+            int depthFound = 0;
+            
+            for (int depth = 0; depth < settings.playoutDepthLimit; depth++)
             {
                 var simMoves = moveGenerator.GetSimMoves(simState, currentPlayer);
-        
+                
                 if (simMoves.Count == 0)
                 {
-                    return 0.5f;
+                    break;
                 }
                 SimMove randomMove = simMoves[rand.Next(simMoves.Count)];
+                moves.Add(randomMove);
                 simState = ApplySimMove(simState, randomMove);
+                
+                deadKing = GetKingCaptured(simState);
+                
+                if(deadKing == KingDead.Black && currentPlayer)
+                {
+                    depthFound = depth;
+                    break;
+                }
+                if(deadKing == KingDead.White && !currentPlayer)
+                {
+                    depthFound = depth;
+                    break;
+                }
+                
                 currentPlayer = !currentPlayer;
             }
-            return evaluation.EvaluateSimBoard(simState, currentPlayer);
+            
+            if (deadKing == KingDead.None)
+            {
+                //return evaluation.EvaluateSimBoard(simState, !node.GameState.WhiteToMove);
+                return 0;
+            }
+            return EvaluateKingCaptured(deadKing, !node.GameState.WhiteToMove, depthFound / (float) settings.playoutDepthLimit);
         }
         
         private SimPiece[,] ApplySimMove(SimPiece[,] state, SimMove move)
@@ -147,26 +184,66 @@ namespace Chess
                 currentNode = currentNode.Parent;
             }
         }
-        
         float UCB1Value(MCTSNode node)
         {
             if (node.VisitCount == 0)
                 return float.MaxValue;
 
             float averageValue = node.TotalValue / node.VisitCount;
-            averageValue = Mathf.Clamp01(averageValue);
+            // averageValue = Mathf.Clamp01(averageValue);
             
             if (!node.IsPlayerMove)
             {
                 averageValue = 1 - averageValue;
             }
-
             float explorationTerm = settings.ExplorationConstant * 
                                     Mathf.Sqrt(Mathf.Log(node.Parent.VisitCount) / node.VisitCount);
 
             return averageValue + explorationTerm;
         }
+        
+        
+        KingDead GetKingCaptured(SimPiece[,] simState)
+        {
+            bool whiteAlive = false;
+            bool blackAlive = false;
 
+            for (int row = 0; row < simState.GetLength(0); row++)
+            {
+                for (int col = 0; col < simState.GetLength(1); col++)
+                {
+                    SimPiece piece = simState[row, col];
+                    if (piece != null && piece.type == SimPieceType.King)
+                    {
+                        if (simState[row, col].team)
+                        {
+                            whiteAlive = true;
+                        }
+                        else
+                        {
+                            blackAlive = true;
+                        }
+                    }
+                    if (whiteAlive && blackAlive) return KingDead.None;
+                }
+            }
+            return !blackAlive ? KingDead.Black : KingDead.White;
+        }
+
+        float EvaluateKingCaptured(KingDead deadKing, bool whiteToMove, float completeness)
+        {
+            float res;
+            if (whiteToMove)
+            {
+                res = deadKing == KingDead.Black ? 1 - completeness : 0;
+            }
+            else
+            {
+                res = deadKing == KingDead.White ? 1 - completeness : 0;
+            }
+            return res;
+        }
+        
         void LogDebugInfo()
         {
             searchStopwatch.Stop();

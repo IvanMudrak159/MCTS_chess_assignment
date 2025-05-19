@@ -13,6 +13,7 @@
         public List<Move> UnexploredMoves { get; private set; }
         public bool IsPlayerMove { get; private set; }
         public bool IsRoot {get; private set;}
+        public float ValuePercentage {get; private set;}
 
 
         public MCTSNode(Board gameState, MCTSNode parent, Move move, bool isPlayerMove, bool isRoot)
@@ -31,7 +32,7 @@
 
         public MCTSNode AddChild(Move move, Board newGameState)
         {
-            var childNode = new MCTSNode(newGameState, this, move, IsPlayerMove, IsRoot);
+            var childNode = new MCTSNode(newGameState, this, move, true, false);
             Children.Add(childNode);
             UnexploredMoves.Remove(move);
             return childNode;
@@ -41,6 +42,7 @@
         {
             VisitCount++;
             TotalValue += simulationResult;
+            ValuePercentage = TotalValue / VisitCount;
         }
     }
 }
