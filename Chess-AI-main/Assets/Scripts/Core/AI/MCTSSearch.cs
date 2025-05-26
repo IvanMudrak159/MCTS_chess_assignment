@@ -1,11 +1,11 @@
-﻿using System.Collections.Generic;
-using UnityEngine;
-
-
-namespace Chess
+﻿namespace Chess
 {
+    using System;
+    using System.Collections.Generic;
     using System.Linq;
-
+    using System.Threading;
+    using UnityEngine;
+    using static System.Math;
     class MCTSSearch : ISearch
     {
         enum KingDead
@@ -14,14 +14,14 @@ namespace Chess
             Black,
             White,
         }
-        
+
         public event System.Action<Move> onSearchComplete;
 
         MoveGenerator moveGenerator;
-        MCTSNode rootNode;
+
+        MCTSNode rootSearchNode;
 
         Move bestMove;
-        int bestEval;
         bool abortSearch;
 
         MCTSSettings settings;
@@ -40,51 +40,28 @@ namespace Chess
             evaluation = new Evaluation();
             moveGenerator = new MoveGenerator();
             rand = new System.Random();
+            
         }
 
         public void StartSearch()
         {
             InitDebugInfo();
 
-            // Initialize search settings
-            bestEval = 0;
             bestMove = Move.InvalidMove;
 
             moveGenerator.promotionsToGenerate = settings.promotionsToSearch;
             abortSearch = false;
             Diagnostics = new SearchDiagnostics();
 
-            rootNode = new MCTSNode(board, null, Move.InvalidMove, true, true);
-
-            int iterations = 0;
-            while (!abortSearch && (iterations < settings.maxNumOfPlayouts || settings.useTimeLimit))
-            {
-                SearchMoves();
-                iterations++;
-                
-                if (settings.useTimeLimit && searchStopwatch.ElapsedMilliseconds >= settings.searchTimeMillis)
-                {
-                    abortSearch = true;
-                }
-            }
-            
-            bestMove = SelectBestMove();
+            rootSearchNode = new MCTSNode(board, Move.InvalidMove);
+            SearchMoves();
 
             onSearchComplete?.Invoke(bestMove);
 
-            LogDebugInfo();
-        }
-
-        private Move SelectBestMove()
-        {
-            if (rootNode.Children.Count == 0)
-                return Move.InvalidMove;
-                
-            MCTSNode bestChild = rootNode.Children
-                .OrderByDescending(n => n.VisitCount == 0 ? float.NegativeInfinity : n.TotalValue / n.VisitCount)
-                .First();
-            List<MCTSNode> children = rootNode.Children.OrderByDescending(n => n.TotalValue / n.VisitCount).ToList();
-            return bestChild.Move;
+            if (!settings.useThreading)
+            {
+                LogDebugInfo();
+            }
         }
 
         public void EndSearch()
@@ -97,110 +74,91 @@ namespace Chess
 
         void SearchMoves()
         {
-            MCTSNode selectedNode = Expand();
-            if (selectedNode == null)
+            ExpandNode(rootSearchNode, true);
+            searchStopwatch.Start();
+            int numOfPlayouts = 0;
+            while (searchStopwatch.ElapsedMilliseconds < settings.searchTimeMillis && numOfPlayouts < settings.maxNumOfPlayouts && !abortSearch)
             {
-                Debug.LogError("selectedNode is null");
-                return;
+                MCTSNode selectedNode = SelectBestNode();
+                if (selectedNode.VisitCount > 0)
+                {
+                    selectedNode = ExpandNode(selectedNode, false);
+                }
+                float simulationResult = Simulate(selectedNode);
+                Backpropagate(selectedNode,1 - simulationResult);
+
+                numOfPlayouts++;
+
             }
-            float simulationResult = Simulate(selectedNode);
-            Backpropagate(selectedNode, simulationResult);
+            bestMove = rootSearchNode.Children
+                .OrderByDescending(child => child.TotalValue)
+                .First().Move;
+            
+            List<MCTSNode> nodes = rootSearchNode.Children
+                .OrderByDescending(child => child.TotalValue).ToList();
+            
+            searchStopwatch.Stop();
         }
 
-        private MCTSNode Expand()
+        MCTSNode SelectBestNode()
         {
-            MCTSNode node = rootNode;
-
-            while (node.UnexploredMoves.Count == 0 && node.Children.Count > 0)
+            var node = rootSearchNode;
+            while (node.Children.Count > 0)
             {
-                node = node.Children.OrderByDescending(UCB1Value).First();
-            }
-
-            if (node.UnexploredMoves.Count > 0)
-            {
-                Move moveToExplore = node.UnexploredMoves.Last();
-                node.UnexploredMoves.Remove(moveToExplore);
-
-                Board newGameState = node.GameState.Clone();
-                newGameState.MakeMove(moveToExplore);
-                MCTSNode child = node.AddChild(moveToExplore, newGameState);
-
-                return child;
+                node = node.GetBestChild();
             }
             return node;
         }
 
-        private float Simulate(MCTSNode node)
-        {       
-            SimPiece[,] simState = node.GameState.GetLightweightClone();
-            bool currentPlayer = node.GameState.WhiteToMove;
-            //List<SimMove> moves = new List<SimMove>();
-            KingDead deadKing = KingDead.None;
-            for (int depth = 0; depth < settings.playoutDepthLimit; depth++)
+        MCTSNode ExpandNode(MCTSNode nodeToExpand, bool isRoot)
+        {
+            List<Move> unexploredMoves = moveGenerator.GenerateMoves(nodeToExpand.GameState, isRoot);
+            unexploredMoves.Reverse();
+            MCTSNode node = nodeToExpand;
+            foreach (Move move in unexploredMoves)
             {
-                var simMoves = moveGenerator.GetSimMoves(simState, currentPlayer);
-                
-                if (simMoves.Count == 0)
-                {
-                    break;
-                }
-                SimMove randomMove = simMoves[rand.Next(simMoves.Count)];
-                //moves.Add(randomMove);
+                Board gameState = nodeToExpand.GameState.Clone();
+                gameState.MakeMove(move);
+                node = new MCTSNode(gameState, move, nodeToExpand);
+                nodeToExpand.AddChild(node);
+            }
+            return node;
+        }
+
+        float Simulate(MCTSNode nodeForSim)
+        {
+            var simState = nodeForSim.GameState.GetLightweightClone();
+            bool whiteTurn = nodeForSim.GameState.WhiteToMove;
+
+            int playoutDepth = 0;
+            while (playoutDepth < settings.playoutDepthLimit && GetKingCaptured(simState) == KingDead.None)
+            {
+                var possibleMoves = moveGenerator.GetSimMoves(simState, whiteTurn);
+                SimMove randomMove = possibleMoves[rand.Next(possibleMoves.Count)];
+
                 simState = ApplySimMove(simState, randomMove);
-                
-                deadKing = GetKingCaptured(simState);
-                
-                if(deadKing == KingDead.Black && currentPlayer) break;
-                if(deadKing == KingDead.White && !currentPlayer) break;
-                
-                currentPlayer = !currentPlayer;
+                whiteTurn = !whiteTurn;
+                playoutDepth++;
             }
-            
-            if (deadKing == KingDead.None)
+
+            KingDead res = GetKingCaptured(simState);
+            if (res == KingDead.None)
             {
-                return Mathf.Clamp01(evaluation.EvaluateSimBoard(simState, !node.GameState.WhiteToMove));
+                return evaluation.EvaluateSimBoard(simState, nodeForSim.GameState.WhiteToMove);
             }
-            return EvaluateKingCaptured(deadKing, !node.GameState.WhiteToMove);
-        }
-        
-        private SimPiece[,] ApplySimMove(SimPiece[,] state, SimMove move)
-        {
-            state[move.endCoord1, move.endCoord2] = state[move.startCoord1, move.startCoord2];
-            state[move.startCoord1, move.startCoord2] = null;
-            return state;
+            return EvaluateKingCaptured(res, nodeForSim.GameState.WhiteToMove);
         }
 
-        private void Backpropagate(MCTSNode node, float simulationResult)
+        void Backpropagate(MCTSNode simNode, float result)
         {
-            MCTSNode currentNode = node;
-            while (currentNode != null)
+            while (simNode != null)
             {
-                currentNode.UpdateStatistics(simulationResult);
-                simulationResult = 1 - simulationResult;
-                currentNode = currentNode.Parent;
+                simNode.UpdateStatistics(result);
+                result = 1 - result;
+                simNode = simNode.Parent;
             }
         }
-        
-        float UCB1Value(MCTSNode node)
-        {
-            if (node.VisitCount == 0)
-                return float.MaxValue;
 
-            float averageValue = node.TotalValue / node.VisitCount;
-            averageValue = Mathf.Clamp01(averageValue);
-            
-            if (!node.IsPlayerMove)
-            {
-                averageValue = 1 - averageValue;
-            }
-
-            float explorationTerm = settings.ExplorationConstant * 
-                                    Mathf.Sqrt(Mathf.Log(node.Parent.VisitCount) / node.VisitCount);
-
-            return averageValue + explorationTerm;
-        }
-        
-        
         KingDead GetKingCaptured(SimPiece[,] simState)
         {
             bool whiteAlive = false;
@@ -241,18 +199,21 @@ namespace Chess
             }
             return res;
         }
-        
+
+        private SimPiece[,] ApplySimMove(SimPiece[,] state, SimMove move)
+        {
+            state[move.endCoord1, move.endCoord2] = state[move.startCoord1, move.startCoord2];
+            state[move.startCoord1, move.startCoord2] = null;
+            return state;
+        }
+
         void LogDebugInfo()
         {
-            searchStopwatch.Stop();
-            Debug.Log($"Search completed in {searchStopwatch.ElapsedMilliseconds} ms");
-            Debug.Log($"Best move found: {bestMove}");
         }
 
         void InitDebugInfo()
         {
             searchStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            // Optional
         }
     }
 }

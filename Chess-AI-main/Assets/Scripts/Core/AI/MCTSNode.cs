@@ -1,4 +1,6 @@
-﻿namespace Chess
+﻿using UnityEngine;
+
+namespace Chess
 {
     using System.Collections.Generic;
 
@@ -10,32 +12,22 @@
         public Move Move { get; private set; }
         public int VisitCount { get; private set; }
         public float TotalValue { get; private set; }
-        public List<Move> UnexploredMoves { get; private set; }
-        public bool IsPlayerMove { get; private set; }
-        public bool IsRoot {get; private set;}
         public float ValuePercentage {get; private set;}
-
-
-        public MCTSNode(Board gameState, MCTSNode parent, Move move, bool isPlayerMove, bool isRoot)
+        
+        
+        public MCTSNode(Board gameState,Move move, MCTSNode parent = null)
         {
-            MoveGenerator moveGenerator = new MoveGenerator ();
             GameState = gameState;
-            Parent = parent;
             Move = move;
-            IsRoot = isRoot;
-            IsPlayerMove = isPlayerMove;
+            Parent = parent;
             Children = new List<MCTSNode>();
-            UnexploredMoves = moveGenerator.GenerateMoves(gameState, isRoot);
             VisitCount = 0;
             TotalValue = 0;
         }
 
-        public MCTSNode AddChild(Move move, Board newGameState)
+        public void AddChild(MCTSNode child)
         {
-            var childNode = new MCTSNode(newGameState, this, move, true, false);
-            Children.Add(childNode);
-            UnexploredMoves.Remove(move);
-            return childNode;
+            Children.Add(child);
         }
 
         public void UpdateStatistics(float simulationResult)
@@ -43,6 +35,29 @@
             VisitCount++;
             TotalValue += simulationResult;
             ValuePercentage = TotalValue / VisitCount;
+        }
+        
+        public MCTSNode GetBestChild(float explorationParameter = 1)
+        {
+            MCTSNode bestChild = null;
+            float bestValue = float.MinValue;
+
+            foreach (var child in Children)
+            {
+                if (child.VisitCount == 0) {
+                    return child;
+                }
+                float uctValue = (child.TotalValue / child.VisitCount) +
+                                 explorationParameter * Mathf.Sqrt(Mathf.Log(VisitCount) / (child.VisitCount));
+
+                if (uctValue > bestValue)
+                {
+                    bestValue = uctValue;
+                    bestChild = child;
+                }
+            }
+
+            return bestChild;
         }
     }
 }
